@@ -1,0 +1,26 @@
+# Backend
+backend/.venv/
+backend/__pycache__/
+backend/**/__pycache__/
+backend/.pytest_cache/
+backend/data/*.db
+backend/data/*.db-wal
+backend/data/*.db-shm
+backend/data/*.key
+backend/app/static/
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+
+# Runtime
+run/
+logs/
+
+# [KOS20260923] "처음부터 공개하기 위한 구조로" 요청 - dev/rel/main을 한 저장소,
+# 평범한 merge로 오가려면 애초에 어떤 브랜치에도 민감정보가 커밋된 적이 없어야
+# 한다. docs/ai-log(실제 사내망 IP·장비 조사 기록)와 설계서 docx/pdf는 git으로
+# 관리하지 않고 로컬 파일로만 둔다.
+docs/ai-log/
+*.docx
+*.pdf
