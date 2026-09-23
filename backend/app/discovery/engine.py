@@ -35,6 +35,7 @@ from app.collectors.probe import (
     probe_ssh_banner,
 )
 from app.collectors.snmp_collector import SnmpCollector
+from app.config_history import record_config_change
 from app.credentials import get_or_create_snmp_credential_profile
 from app.identity import DeviceObservation, resolve_or_create_device
 from app.models import (
@@ -430,6 +431,16 @@ class DiscoveryEngine:
                     DeviceInterface.device_id == device.id, DeviceInterface.if_index == info.if_index
                 )
             )
+            # [KOS20260923] "구성 변경 이력" 요청 - 신규 발견 포트는 비교할 이전
+            # 값이 없어 "None → UP" 같은 가짜 변경으로 남기지 않도록 기존 행이
+            # 있을 때만(is_new_row=False) 아래에서 diff를 기록한다. oper_status/
+            # stp_state는 링크 플랩이나 STP 재수렴으로 정상적으로 자주 바뀌어
+            # 구성 변경이라기보다 Fault 영역 이벤트에 가까우므로 제외하고,
+            # admin_status(관리자가 의도적으로 올리고 내리는 값)와 vlan(PVID)만
+            # 구성 변경 이력 대상으로 삼는다.
+            is_new_row = row is None
+            old_admin_status = None if is_new_row else row.admin_status
+            old_vlan = None if is_new_row else row.vlan
             if row is None:
                 row = DeviceInterface(device_id=device.id, if_index=info.if_index)
                 session.add(row)
@@ -447,6 +458,25 @@ class DiscoveryEngine:
             row.last_seen_at = utcnow()
             session.flush()
             iface_id_by_index[info.if_index] = row.id
+            if not is_new_row:
+                record_config_change(
+                    session,
+                    device_id=device.id,
+                    interface_id=row.id,
+                    field_name="admin_status",
+                    old_value=old_admin_status,
+                    new_value=row.admin_status,
+                    source="DISCOVERY",
+                )
+                record_config_change(
+                    session,
+                    device_id=device.id,
+                    interface_id=row.id,
+                    field_name="vlan",
+                    old_value=None if old_vlan is None else str(old_vlan),
+                    new_value=None if row.vlan is None else str(row.vlan),
+                    source="DISCOVERY",
+                )
         session.commit()
 
         has_ip_forwarding = await snmp.is_ip_forwarding()
@@ -460,7 +490,16 @@ class DiscoveryEngine:
         # 섣불리 False로 덮어쓰지 않는다.
         stp_info = await snmp.get_stp_info() if self.scope.collect_interfaces else StpInfo(is_root=False, supported=False)
         if stp_info.supported:
+            old_is_stp_root = device.is_stp_root
             device.is_stp_root = stp_info.is_root
+            record_config_change(
+                session,
+                device_id=device.id,
+                field_name="is_stp_root",
+                old_value=str(old_is_stp_root),
+                new_value=str(device.is_stp_root),
+                source="DISCOVERY",
+            )
 
         lldp_neighbors = await snmp.get_lldp_neighbors() if self.scope.collect_lldp else []
         for n in lldp_neighbors:

@@ -20,6 +20,7 @@ from app.classification.device_role import (
     classify_device_role,
     extract_floor_label,
 )
+from app.config_history import record_config_change
 from app.models import (
     ArpEntry,
     DeviceInterface,
@@ -516,6 +517,15 @@ def classify_and_persist_roles(session: Session) -> int:
 
         evidence = _build_role_evidence(session, device, metrics.get(device.id, {}))
         result = classify_device_role(evidence)
+        if result.device_role != device.device_role:
+            record_config_change(
+                session,
+                device_id=device.id,
+                field_name="device_role",
+                old_value=device.device_role,
+                new_value=result.device_role,
+                source="DISCOVERY",
+            )
         device.device_role = result.device_role
         device.role_score = result.score
         device.role_detail = json.dumps(result.detail, ensure_ascii=False)

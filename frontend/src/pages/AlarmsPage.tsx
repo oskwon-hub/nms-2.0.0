@@ -18,6 +18,7 @@ const CATEGORY_LABEL: Record<string, string> = {
   LINK: "링크",
   CONTROL: "제어",
   DISCOVERY: "Discovery",
+  CONFIG: "구성 변경",
 };
 
 const POLL_INTERVAL_MS = 15000;
@@ -170,6 +171,7 @@ export default function AlarmsPage() {
           <option value="LINK">링크</option>
           <option value="CONTROL">제어</option>
           <option value="DISCOVERY">Discovery</option>
+          <option value="CONFIG">구성 변경</option>
         </select>
         <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13 }}>
           <input type="checkbox" checked={showSuppressed} onChange={(e) => setShowSuppressed(e.target.checked)} />

@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import {
   api,
   ArpRow,
+  ConfigChangeLog,
   DeviceDetail,
   DeviceInterfaceRow,
   FdbRow,
@@ -12,8 +13,28 @@ import {
 import StatusBadge from "./StatusBadge";
 import DeviceOverviewPanel from "./DeviceOverviewPanel";
 import DeviceDiagnostics from "./DeviceDiagnostics";
+import { formatUtcDateTime } from "../lib/dateTime";
 
-type Tab = "overview" | "interfaces" | "neighbors" | "fdb" | "arp" | "routes" | "poe";
+type Tab = "overview" | "interfaces" | "neighbors" | "fdb" | "arp" | "routes" | "poe" | "history";
+
+// ConfigurationPage.tsx와 같은 매핑 - 여기서도 필드 이름을 그대로 노출하지 않고
+// 한글 라벨로 바꾼다.
+const FIELD_LABELS: Record<string, string> = {
+  admin_status: "포트 Admin 상태",
+  vlan: "VLAN (PVID)",
+  is_stp_root: "STP Root 여부",
+  device_role: "Role",
+  management_ip: "관리 IP",
+  os_version: "OS 버전",
+  firmware_version: "펌웨어 버전",
+};
+
+function fieldLabel(fieldName: string): string {
+  return FIELD_LABELS[fieldName] ?? fieldName;
+}
+
+// backend/app/control/config_restore.py의 RESTORABLE_FIELDS와 맞춘다.
+const RESTORABLE_FIELDS = new Set(["admin_status", "device_role"]);
 
 function formatBytes(value: number | null): string {
   if (value == null) return "-";
@@ -53,6 +74,7 @@ export default function DeviceDetailContent({ deviceId, headerExtra }: DeviceDet
   const [arp, setArp] = useState<ArpRow[]>([]);
   const [routes, setRoutes] = useState<RouteRow[]>([]);
   const [poe, setPoe] = useState<PoeRow[]>([]);
+  const [configChanges, setConfigChanges] = useState<ConfigChangeLog[]>([]);
   const [tab, setTab] = useState<Tab>("overview");
   const [error, setError] = useState<string | null>(null);
   const [busyIfId, setBusyIfId] = useState<number | null>(null);
@@ -66,6 +88,7 @@ export default function DeviceDetailContent({ deviceId, headerExtra }: DeviceDet
     api.getArp(deviceId).then(setArp).catch(() => {});
     api.getRoutes(deviceId).then(setRoutes).catch(() => {});
     api.getPoe(deviceId).then(setPoe).catch(() => {});
+    api.listConfigChanges({ device_id: deviceId, limit: 200 }).then(setConfigChanges).catch(() => {});
   };
 
   useEffect(reload, [deviceId]);
@@ -120,6 +143,79 @@ export default function DeviceDetailContent({ deviceId, headerExtra }: DeviceDet
     }
   };
 
+  const [vlanDrafts, setVlanDrafts] = useState<Record<number, string>>({});
+  const [descDrafts, setDescDrafts] = useState<Record<number, string>>({});
+
+  const handleVlanSave = async (iface: DeviceInterfaceRow) => {
+    if (!device) return;
+    const raw = vlanDrafts[iface.id] ?? (iface.vlan != null ? String(iface.vlan) : "");
+    const vlan = parseInt(raw, 10);
+    if (Number.isNaN(vlan)) {
+      setError("VLAN은 숫자여야 합니다.");
+      return;
+    }
+    if (
+      iface.is_protected &&
+      !window.confirm(`${iface.name} 포트는 보호 포트(${iface.protected_reason})입니다. 강제로 VLAN을 변경하시겠습니까?`)
+    ) {
+      return;
+    }
+    setBusyIfId(iface.id);
+    setError(null);
+    try {
+      await api.setVlan(device.id, iface.id, vlan, "operator", iface.is_protected);
+      reload();
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setBusyIfId(null);
+    }
+  };
+
+  const handleDescriptionSave = async (iface: DeviceInterfaceRow) => {
+    if (!device) return;
+    const description = descDrafts[iface.id] ?? "";
+    if (
+      iface.is_protected &&
+      !window.confirm(`${iface.name} 포트는 보호 포트(${iface.protected_reason})입니다. 강제로 설명을 변경하시겠습니까?`)
+    ) {
+      return;
+    }
+    setBusyIfId(iface.id);
+    setError(null);
+    try {
+      await api.setDescription(device.id, iface.id, description, "operator", iface.is_protected);
+      setDescDrafts((prev) => ({ ...prev, [iface.id]: "" }));
+      reload();
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setBusyIfId(null);
+    }
+  };
+
+  const [restoringChangeId, setRestoringChangeId] = useState<number | null>(null);
+  const handleRestoreConfigChange = async (change: ConfigChangeLog) => {
+    if (
+      !window.confirm(`${fieldLabel(change.field_name)}을(를) "${change.old_value ?? "(없음)"}"(으)로 복구할까요?`)
+    ) {
+      return;
+    }
+    setRestoringChangeId(change.id);
+    setError(null);
+    try {
+      const result = await api.restoreConfigChange(change.id);
+      if (result.result !== "SUCCESS") {
+        setError(result.error_message || `복구 실패 (${result.result})`);
+      }
+      reload();
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setRestoringChangeId(null);
+    }
+  };
+
   if (!device) {
     return (
       <div>
@@ -141,7 +237,7 @@ export default function DeviceDetailContent({ deviceId, headerExtra }: DeviceDet
       {error && <div className="error-banner">{error}</div>}
 
       <div className="tabs">
-        {(["overview", "interfaces", "neighbors", "fdb", "arp", "routes", "poe"] as Tab[]).map((t) => (
+        {(["overview", "interfaces", "neighbors", "fdb", "arp", "routes", "poe", "history"] as Tab[]).map((t) => (
           <button key={t} className={tab === t ? "active" : ""} onClick={() => setTab(t)}>
             {t.toUpperCase()}
           </button>
@@ -179,6 +275,8 @@ export default function DeviceDetailContent({ deviceId, headerExtra }: DeviceDet
                 <th title="BRIDGE-MIB dot1dStpPortState">STP</th>
                 <th>링크 방향</th>
                 <th>Protected</th>
+                <th>VLAN</th>
+                <th title="ifAlias는 상시 조회하지 않아 현재 값을 표시하지 않습니다. 입력하면 새 값으로 설정만 합니다.">설명 설정</th>
                 <th>제어</th>
               </tr>
             </thead>
@@ -213,6 +311,31 @@ export default function DeviceDetailContent({ deviceId, headerExtra }: DeviceDet
                     {!iface.is_uplink && !iface.is_downlink && !iface.is_trunk && <span className="muted">-</span>}
                   </td>
                   <td>{iface.is_protected ? <span className="badge badge-manual">{iface.protected_reason}</span> : "-"}</td>
+                  <td>
+                    <input
+                      type="number"
+                      value={vlanDrafts[iface.id] ?? (iface.vlan != null ? String(iface.vlan) : "")}
+                      onChange={(e) => setVlanDrafts((prev) => ({ ...prev, [iface.id]: e.target.value }))}
+                      style={{ width: 64 }}
+                      aria-label={`${iface.name} VLAN`}
+                    />{" "}
+                    <button className="btn" disabled={busyIfId === iface.id} onClick={() => handleVlanSave(iface)}>
+                      저장
+                    </button>
+                  </td>
+                  <td>
+                    <input
+                      type="text"
+                      placeholder="새 설명"
+                      value={descDrafts[iface.id] ?? ""}
+                      onChange={(e) => setDescDrafts((prev) => ({ ...prev, [iface.id]: e.target.value }))}
+                      style={{ width: 120 }}
+                      aria-label={`${iface.name} 설명`}
+                    />{" "}
+                    <button className="btn" disabled={busyIfId === iface.id} onClick={() => handleDescriptionSave(iface)}>
+                      설정
+                    </button>
+                  </td>
                   <td>
                     <button
                       className="btn"
@@ -367,6 +490,57 @@ export default function DeviceDetailContent({ deviceId, headerExtra }: DeviceDet
                     <td>{p.status}</td>
                     <td>{p.power_mw != null ? `${(p.power_mw / 1000).toFixed(1)} W` : "-"}</td>
                     <td>{p.poe_class ?? "-"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      )}
+
+      {tab === "history" && (
+        <div className="card">
+          {configChanges.length === 0 ? (
+            <div className="muted">기록된 구성 변경이 없습니다.</div>
+          ) : (
+            <table>
+              <thead>
+                <tr>
+                  <th>시각</th>
+                  <th>필드</th>
+                  <th>이전 → 새 값</th>
+                  <th>주체</th>
+                  <th>수행자</th>
+                  <th>복구</th>
+                </tr>
+              </thead>
+              <tbody>
+                {configChanges.map((c) => (
+                  <tr key={c.id}>
+                    <td className="muted">{formatUtcDateTime(c.detected_at)}</td>
+                    <td>{fieldLabel(c.field_name)}</td>
+                    <td className="muted">
+                      {c.old_value ?? "(없음)"} → {c.new_value ?? "(없음)"}
+                    </td>
+                    <td>
+                      <span className={`badge ${c.source === "MANUAL" ? "badge-stale" : "badge-online"}`}>
+                        {c.source === "MANUAL" ? "수동 변경" : "재탐색 감지"}
+                      </span>
+                    </td>
+                    <td className="muted">{c.performed_by ?? "-"}</td>
+                    <td>
+                      {RESTORABLE_FIELDS.has(c.field_name) ? (
+                        <button
+                          className="btn"
+                          disabled={restoringChangeId === c.id}
+                          onClick={() => handleRestoreConfigChange(c)}
+                        >
+                          {restoringChangeId === c.id ? "복구 중..." : "복구"}
+                        </button>
+                      ) : (
+                        <span className="muted">지원 안 함</span>
+                      )}
+                    </td>
                   </tr>
                 ))}
               </tbody>

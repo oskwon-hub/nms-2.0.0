@@ -4,6 +4,20 @@
 [Keep a Changelog](https://keepachangelog.com/ko/1.1.0/)를 따르고, 버전은
 [Semantic Versioning](https://semver.org/lang/ko/)을 따릅니다.
 
+## [2.1.0] - 2026-09-23
+
+### 추가
+
+- 구성 관리(Configuration Management): VLAN/STP Root/Role/관리 IP/OS·펌웨어
+  버전의 변경을 자동 감지해 기록하는 구성 변경 이력(Configuration Change
+  History)과 전용 화면.
+- Alarms에 CONFIG 카테고리 추가 - 재탐색이 감지한 예기치 않은 구성 변경을
+  WARNING으로, 운영자가 직접 실행한 변경은 INFO로 구분해 알린다.
+- 구성 변경 이력에서 이전 값으로 되돌리는 복구 기능(포트 Admin 상태, VLAN,
+  Role).
+- 포트 VLAN(PVID) 변경, 포트 설명(Description) 변경 제어 기능(SNMP SET) - 기존
+  포트/PoE Enable-Disable과 동일하게 보호 포트 확인과 Audit Log를 남긴다.
+
 ## [2.0.0] - 2026-09-22
 
 ### 추가

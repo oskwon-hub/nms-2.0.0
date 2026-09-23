@@ -8,8 +8,10 @@ from app.collectors.snmp_collector import (
     OID_DOT1D_STP_PORT_DESIGNATED_BRIDGE,
     OID_DOT1D_STP_PORT_STATE,
     OID_DOT1D_STP_ROOT_PORT,
+    OID_DOT1Q_PVID,
     OID_DOT1Q_TP_FDB_PORT,
     OID_DOT1Q_VLAN_CURRENT_FDB_ID,
+    OID_IF_ALIAS,
     OID_IF_DESCR,
     OID_IF_IN_OCTETS,
     OID_IF_OUT_OCTETS,
@@ -24,6 +26,7 @@ from app.collectors.snmp_collector import (
     OID_SYS_NAME,
     OID_SYS_OBJECT_ID,
     OID_SYS_UPTIME,
+    CollectorError,
     SnmpCollector,
     vendor_from_sys_object_id,
 )
@@ -418,3 +421,73 @@ async def test_get_interfaces_treats_all_zero_designated_bridge_as_unknown(monke
     result = await collector.get_interfaces()
 
     assert result[0].stp_designated_bridge_mac is None
+
+
+@pytest.mark.asyncio
+async def test_set_port_pvid_translates_ifindex_to_bridge_port(monkeypatch):
+    """[KOS20260923] dot1qPvid는 ifIndex가 아니라 dot1dBasePort로 색인되므로
+    (get_port_pvids()와 동일), SET 전에 dot1dBasePortIfIndex로 역매핑해야 한다."""
+    collector = SnmpCollector("192.0.2.20")
+    rows = {
+        OID_DOT1D_BASE_PORT_IFINDEX: [
+            (f"{OID_DOT1D_BASE_PORT_IFINDEX}.5", 1000005),
+        ],
+    }
+
+    async def fake_walk(oid: str, max_rows: int = 20000):
+        return rows.get(oid, [])
+
+    set_calls = []
+
+    async def fake_set(oid: str, value):
+        set_calls.append((oid, value))
+
+    monkeypatch.setattr(collector, "_walk", fake_walk)
+    monkeypatch.setattr(collector, "_set", fake_set)
+
+    await collector.set_port_pvid(1000005, 20)
+
+    assert set_calls == [(f"{OID_DOT1Q_PVID}.5", 20)]
+
+
+@pytest.mark.asyncio
+async def test_set_port_pvid_raises_when_ifindex_has_no_bridge_port(monkeypatch):
+    collector = SnmpCollector("192.0.2.21")
+
+    async def fake_walk(oid: str, max_rows: int = 20000):
+        return []
+
+    monkeypatch.setattr(collector, "_walk", fake_walk)
+
+    with pytest.raises(CollectorError):
+        await collector.set_port_pvid(999, 20)
+
+
+@pytest.mark.asyncio
+async def test_set_if_alias_sets_expected_oid(monkeypatch):
+    collector = SnmpCollector("192.0.2.22")
+    set_calls = []
+
+    async def fake_set(oid: str, value):
+        set_calls.append((oid, value))
+
+    monkeypatch.setattr(collector, "_set", fake_set)
+
+    await collector.set_if_alias(3, "uplink to core")
+
+    assert len(set_calls) == 1
+    oid, value = set_calls[0]
+    assert oid == f"{OID_IF_ALIAS}.3"
+    assert str(value) == "uplink to core"
+
+
+@pytest.mark.asyncio
+async def test_get_if_alias_returns_none_when_unsupported(monkeypatch):
+    collector = SnmpCollector("192.0.2.23")
+
+    async def fake_get(oid: str):
+        raise CollectorError("no such object")
+
+    monkeypatch.setattr(collector, "_get", fake_get)
+
+    assert await collector.get_if_alias(1) is None

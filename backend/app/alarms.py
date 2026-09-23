@@ -18,7 +18,7 @@ from typing import Optional
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models import DeviceControlLog, DiscoveryRun, NetworkDevice, NetworkLink
+from app.models import ConfigChangeLog, DeviceControlLog, DiscoveryRun, NetworkDevice, NetworkLink
 
 DOWN_DEVICE_STATUSES = ("STALE", "OFFLINE")
 DOWN_LINK_STATUSES = ("STALE", "DOWN")
@@ -63,7 +63,7 @@ def _find_down_upstream(session: Session, device: NetworkDevice, devices_by_id: 
     return None
 
 
-def list_alarms(session: Session, control_log_limit: int = 50) -> list[Alarm]:
+def list_alarms(session: Session, control_log_limit: int = 50, config_change_limit: int = 50) -> list[Alarm]:
     alarms: list[Alarm] = []
     devices = session.scalars(select(NetworkDevice)).all()
     devices_by_id = {d.id: d for d in devices}
@@ -121,6 +121,31 @@ def list_alarms(session: Session, control_log_limit: int = 50) -> list[Alarm]:
                 message=f"{label} {log.action} {log.result}" + (f" - {log.error_message}" if log.error_message else ""),
                 occurred_at=log.created_at,
                 device_id=log.device_id,
+            )
+        )
+
+    # [KOS20260923] "구성 이상 및 비인가 변경 탐지" 요청 - 재탐색이 감지한
+    # 구성 변경(source=DISCOVERY, 즉 운영자가 NMS 화면에서 직접 바꾼 게 아니라
+    # 장비 쪽 값이 어느새 달라져 있던 경우)은 "혹시 모르는 사이에 바뀐 것 아닌가"
+    # 확인이 필요해 WARNING으로 띄운다. 운영자가 API로 직접 바꾼 MANUAL 변경은
+    # 이미 누가 바꿨는지 알고 있는 의도된 변경이라 INFO로 낮춘다. 확인 후에는
+    # 기존 dismiss 기능(occurred_at=detected_at 기준)으로 "확인했다"는 처리를
+    # 그대로 재사용할 수 있다 - 별도의 승인 테이블을 새로 만들지 않는다.
+    config_change_stmt = (
+        select(ConfigChangeLog).order_by(ConfigChangeLog.detected_at.desc()).limit(config_change_limit)
+    )
+    for change in session.scalars(config_change_stmt):
+        device = devices_by_id.get(change.device_id)
+        label = _device_label(device) if device else f"#{change.device_id}"
+        alarms.append(
+            Alarm(
+                id=f"config:{change.id}",
+                severity="WARNING" if change.source == "DISCOVERY" else "INFO",
+                category="CONFIG",
+                message=f"{label} {change.field_name} 변경: {change.old_value} -> {change.new_value}"
+                + (f" ({change.performed_by})" if change.performed_by else ""),
+                occurred_at=change.detected_at,
+                device_id=change.device_id,
             )
         )
 

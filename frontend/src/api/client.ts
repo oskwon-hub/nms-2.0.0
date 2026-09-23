@@ -264,10 +264,28 @@ export interface ControlLog {
   created_at: string;
 }
 
+export interface RestoreResult {
+  result: "SUCCESS" | "FAILED" | "DENIED";
+  new_value: string | null;
+  error_message: string | null;
+}
+
+export interface ConfigChangeLog {
+  id: number;
+  device_id: number;
+  interface_id: number | null;
+  field_name: string;
+  old_value: string | null;
+  new_value: string | null;
+  source: "DISCOVERY" | "MANUAL";
+  performed_by: string | null;
+  detected_at: string;
+}
+
 export interface Alarm {
   id: string;
   severity: "CRITICAL" | "WARNING" | "INFO";
-  category: "DEVICE" | "LINK" | "CONTROL" | "DISCOVERY";
+  category: "DEVICE" | "LINK" | "CONTROL" | "DISCOVERY" | "CONFIG";
   message: string;
   occurred_at: string;
   device_id: number | null;
@@ -425,6 +443,16 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ performed_by, force }),
     }),
+  setVlan: (deviceId: number, ifId: number, vlan: number, performed_by = "operator", force = false) =>
+    request<ControlLog>(`/devices/${deviceId}/interfaces/${ifId}/vlan`, {
+      method: "POST",
+      body: JSON.stringify({ vlan, performed_by, force }),
+    }),
+  setDescription: (deviceId: number, ifId: number, description: string, performed_by = "operator", force = false) =>
+    request<ControlLog>(`/devices/${deviceId}/interfaces/${ifId}/description`, {
+      method: "POST",
+      body: JSON.stringify({ description, performed_by, force }),
+    }),
   listControlLogs: (params?: { device_id?: number; result?: string; limit?: number }) => {
     const qs = new URLSearchParams();
     if (params?.device_id != null) qs.set("device_id", String(params.device_id));
@@ -433,6 +461,23 @@ export const api = {
     const suffix = qs.toString() ? `?${qs.toString()}` : "";
     return request<ControlLog[]>(`/control-logs${suffix}`);
   },
+  listConfigChanges: (params?: { device_id?: number; field_name?: string; source?: string; limit?: number }) => {
+    const qs = new URLSearchParams();
+    if (params?.device_id != null) qs.set("device_id", String(params.device_id));
+    if (params?.field_name) qs.set("field_name", params.field_name);
+    if (params?.source) qs.set("source", params.source);
+    if (params?.limit) qs.set("limit", String(params.limit));
+    const suffix = qs.toString() ? `?${qs.toString()}` : "";
+    return request<ConfigChangeLog[]>(`/config-changes${suffix}`);
+  },
+  restoreConfigChange: (changeId: number, performed_by = "operator", force = false) =>
+    request<RestoreResult>(`/config-changes/${changeId}/restore`, {
+      method: "POST",
+      body: JSON.stringify({ performed_by, force }),
+    }),
+  bulkDeleteConfigChanges: (ids: number[]) =>
+    request<BulkDeleteResult>("/config-changes/bulk-delete", { method: "POST", body: JSON.stringify({ ids }) }),
+  deleteAllConfigChanges: () => request<BulkDeleteResult>("/config-changes/delete-all", { method: "POST" }),
   listCredentialProfiles: () => request<CredentialProfile[]>("/credential-profiles"),
   createCredentialProfile: (snmp_community: string, name?: string) =>
     request<CredentialProfile>("/credential-profiles", { method: "POST", body: JSON.stringify({ snmp_community, name }) }),

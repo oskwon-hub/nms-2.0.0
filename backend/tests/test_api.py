@@ -401,11 +401,21 @@ def test_role_patch_requires_valid_role(client):
     bad = client.patch(f"/api/devices/{device_id}/role", json={"device_role": "NOT_A_ROLE"})
     assert bad.status_code == 400
 
-    good = client.patch(f"/api/devices/{device_id}/role", json={"device_role": "CORE_SWITCH"})
+    good = client.patch(f"/api/devices/{device_id}/role", json={"device_role": "CORE_SWITCH", "performed_by": "alice"})
     assert good.status_code == 200
     body = good.json()
     assert body["device_role"] == "CORE_SWITCH"
     assert body["role_source"] == "MANUAL"
+
+    # [KOS20260923] 구성 변경 이력 - 수동 Role 변경은 ROLE_CHANGE로 문서화만
+    # 돼 있고 실제로는 기록되지 않던 감사 공백이었다. ConfigChangeLog(source=
+    # MANUAL, performed_by=요청자)로 남는지 확인한다.
+    changes = client.get("/api/config-changes", params={"device_id": device_id}).json()
+    role_changes = [c for c in changes if c["field_name"] == "device_role"]
+    assert len(role_changes) == 1
+    assert role_changes[0]["new_value"] == "CORE_SWITCH"
+    assert role_changes[0]["source"] == "MANUAL"
+    assert role_changes[0]["performed_by"] == "alice"
 
 
 def test_port_control_returns_404_for_unknown_interface(client):

@@ -424,7 +424,10 @@ class DeviceControlLog(Base):
         ForeignKey("device_interface.id", ondelete="SET NULL"), nullable=True
     )
     action: Mapped[str] = mapped_column(String(32), nullable=False)
-    # PORT_ENABLE|PORT_DISABLE|POE_ENABLE|POE_DISABLE|ROLE_CHANGE
+    # PORT_ENABLE|PORT_DISABLE|POE_ENABLE|POE_DISABLE|VLAN_SET|DESCRIPTION_SET|ROLE_CHANGE
+    # [KOS20260923] ROLE_CHANGE는 실제로는 여기(DeviceControlLog)가 아니라
+    # ConfigChangeLog(source=MANUAL)에 남는다 - Role 변경 전용 제어 액션이 따로
+    # 없어 이 값이 실제로 쓰인 적은 없다(기존 문서화 공백, 지금도 값만 예시로 남김).
     before_value: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     requested_value: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     after_value: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
@@ -432,3 +435,27 @@ class DeviceControlLog(Base):
     error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     performed_by: Mapped[str] = mapped_column(String(64), nullable=False, default="system")
     created_at: Mapped[dt.datetime] = mapped_column(DateTime(), default=utcnow)
+
+
+class ConfigChangeLog(Base):
+    """구성 변경 이력 - NMS 화면에서 직접 실행한 포트/PoE 제어(DeviceControlLog가
+    담당)가 아니라, 그 밖의 구성 필드(VLAN, STP Root, Role, 관리 IP, OS/Firmware
+    버전 등)가 재탐색 중 "장비 쪽 값이 이전과 달라진 것을 발견"했거나(source=
+    DISCOVERY) 운영자가 API로 직접 값을 바꿔서(source=MANUAL) 남는 이력이다.
+
+    interface_id가 NULL이면 장비 단위 필드(예: management_ip, device_role)의
+    변경이고, 값이 있으면 그 인터페이스 단위 필드(예: vlan)의 변경이다."""
+
+    __tablename__ = "config_change_log"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    device_id: Mapped[int] = mapped_column(ForeignKey("network_device.id", ondelete="CASCADE"), index=True)
+    interface_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("device_interface.id", ondelete="SET NULL"), nullable=True
+    )
+    field_name: Mapped[str] = mapped_column(String(64), nullable=False)
+    old_value: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    new_value: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    source: Mapped[str] = mapped_column(String(16), nullable=False)  # DISCOVERY|MANUAL
+    performed_by: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)  # MANUAL만 값이 있음
+    detected_at: Mapped[dt.datetime] = mapped_column(DateTime(), default=utcnow)

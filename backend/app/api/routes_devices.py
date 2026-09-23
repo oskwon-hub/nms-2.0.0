@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.classification.device_role import DEVICE_ROLES
 from app.classification.reclassify import reclassify_all_devices
+from app.config_history import record_config_change
 from app.db import db_session_dependency
 from app.diagnostics import get_source_ip, get_source_mac, parse_route_hops, run_diagnostic
 from app.models import (
@@ -243,6 +244,16 @@ def update_device_role(device_id: int, payload: RoleUpdateIn, session: Session =
     device = _get_device_or_404(session, device_id)
     if payload.device_role not in DEVICE_ROLES:
         raise HTTPException(status_code=400, detail=f"알 수 없는 device_role: {payload.device_role}")
+    if payload.device_role != device.device_role:
+        record_config_change(
+            session,
+            device_id=device.id,
+            field_name="device_role",
+            old_value=device.device_role,
+            new_value=payload.device_role,
+            source="MANUAL",
+            performed_by=payload.performed_by,
+        )
     device.device_role = payload.device_role
     device.role_source = "MANUAL"
     session.commit()

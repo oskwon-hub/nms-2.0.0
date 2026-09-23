@@ -67,6 +67,18 @@ class NetworkDeviceDriver(ABC):
     @abstractmethod
     async def disable_poe(self, peth_port_index: int) -> None: ...
 
+    @abstractmethod
+    async def get_port_pvids(self) -> dict[int, int]: ...
+
+    @abstractmethod
+    async def set_vlan(self, if_index: int, vlan: int) -> None: ...
+
+    @abstractmethod
+    async def get_if_alias(self, if_index: int) -> Optional[str]: ...
+
+    @abstractmethod
+    async def set_description(self, if_index: int, description: str) -> None: ...
+
 
 class GenericSNMPDriver(NetworkDeviceDriver):
     """14장 bullet: '표준 MIB'만으로 동작하는 기본 구현. 대부분의 Vendor에서 동작한다."""
@@ -112,6 +124,18 @@ class GenericSNMPDriver(NetworkDeviceDriver):
 
     async def disable_poe(self, peth_port_index: int) -> None:
         await self.snmp.set_poe_admin_enable(peth_port_index, enable=False)
+
+    async def get_port_pvids(self) -> dict[int, int]:
+        return await self.snmp.get_port_pvids()
+
+    async def set_vlan(self, if_index: int, vlan: int) -> None:
+        await self.snmp.set_port_pvid(if_index, vlan)
+
+    async def get_if_alias(self, if_index: int) -> Optional[str]:
+        return await self.snmp.get_if_alias(if_index)
+
+    async def set_description(self, if_index: int, description: str) -> None:
+        await self.snmp.set_if_alias(if_index, description)
 
 
 @dataclass
@@ -329,6 +353,18 @@ class CiscoIosSshDriver(NetworkDeviceDriver):
         raise NotImplementedError("Cisco SSH Driver의 config-mode 제어는 GenericSNMPDriver 사용을 권장한다.")
 
     async def disable_poe(self, peth_port_index: int) -> None:
+        raise NotImplementedError("Cisco SSH Driver의 config-mode 제어는 GenericSNMPDriver 사용을 권장한다.")
+
+    async def get_port_pvids(self) -> dict[int, int]:
+        raise NotImplementedError("Cisco SSH Driver의 config-mode 제어는 GenericSNMPDriver 사용을 권장한다.")
+
+    async def set_vlan(self, if_index: int, vlan: int) -> None:
+        raise NotImplementedError("Cisco SSH Driver의 config-mode 제어는 GenericSNMPDriver 사용을 권장한다.")
+
+    async def get_if_alias(self, if_index: int) -> Optional[str]:
+        raise NotImplementedError("Cisco SSH Driver의 config-mode 제어는 GenericSNMPDriver 사용을 권장한다.")
+
+    async def set_description(self, if_index: int, description: str) -> None:
         raise NotImplementedError("Cisco SSH Driver의 config-mode 제어는 GenericSNMPDriver 사용을 권장한다.")
 
 

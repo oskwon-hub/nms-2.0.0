@@ -3,8 +3,8 @@
 const ABOUT = {
   productName: "NMS (Network Management System)",
   company: "엔에스티정보통신 (NST Information & Communications Co., Ltd.)",
-  version: "2.0.0",
-  writtenAt: "2026-09-20",
+  version: "2.1.0",
+  writtenAt: "2026-09-23",
   license: "GNU General Public License v2.0 (GPLv2)",
 };
 

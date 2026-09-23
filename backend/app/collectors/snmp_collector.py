@@ -36,6 +36,9 @@ OID_IF_OPER_STATUS = "1.3.6.1.2.1.2.2.1.8"
 OID_IF_SPEED = "1.3.6.1.2.1.2.2.1.5"
 OID_IF_IN_OCTETS = "1.3.6.1.2.1.2.2.1.10"
 OID_IF_OUT_OCTETS = "1.3.6.1.2.1.2.2.1.16"
+# [KOS20260923] "안전한 구성 제어" 요청 - IF-MIB ifXTable::ifAlias(포트 설명).
+# ifIndex로 바로 색인되어 dot1qPvid와 달리 BRIDGE-MIB 역매핑이 필요 없다.
+OID_IF_ALIAS = "1.3.6.1.2.1.31.1.1.1.18"
 
 OID_IP_FORWARDING = "1.3.6.1.2.1.4.1.0"
 OID_IP_NET_TO_MEDIA_PHYS = "1.3.6.1.2.1.4.22.1.2"
@@ -622,6 +625,30 @@ class SnmpCollector:
     async def set_poe_admin_enable(self, peth_port_index: int, enable: bool) -> None:
         """13.2절: POWER-ETHERNET-MIB::pethPsePortAdminEnable SET (1=true, 2=false)."""
         await self._set(f"{OID_PETH_ADMIN_ENABLE}.1.{peth_port_index}", ha.Integer(1 if enable else 2))
+
+    async def set_port_pvid(self, if_index: int, vlan: int) -> None:
+        """13.x절: Q-BRIDGE-MIB::dot1qPvid SET - 포트의 Access/Native VLAN(PVID)을
+        바꾼다. get_port_pvids()와 마찬가지로 이 테이블은 ifIndex가 아니라
+        dot1dBasePort로 색인되므로, 먼저 dot1dBasePortIfIndex로 역매핑해야 한다."""
+        bridge_port_ifindex = await self._get_bridge_port_ifindex_map()
+        bridge_port = next((bp for bp, idx in bridge_port_ifindex.items() if idx == if_index), None)
+        if bridge_port is None:
+            raise CollectorError(f"{self.host}: ifIndex {if_index}에 대응하는 BRIDGE-MIB 포트를 찾을 수 없습니다.")
+        await self._set(f"{OID_DOT1Q_PVID}.{bridge_port}", ha.Integer(vlan))
+
+    async def get_if_alias(self, if_index: int) -> str | None:
+        """13.x절: IF-MIB::ifAlias(ifXTable) 단일 조회 - SET 검증용. ifAlias
+        미지원/빈 문자열이면 None으로 취급한다."""
+        try:
+            value = await self._get(f"{OID_IF_ALIAS}.{if_index}")
+        except CollectorError:
+            return None
+        text = str(value)
+        return text or None
+
+    async def set_if_alias(self, if_index: int, description: str) -> None:
+        """13.x절: IF-MIB::ifAlias SET - 포트 설명(Description)을 바꾼다."""
+        await self._set(f"{OID_IF_ALIAS}.{if_index}", ha.OctetString(description))
 
 
 # [KOS20260921] sysObjectID(1.3.6.1.4.1.<enterprise>...)의 enterprise 번호로

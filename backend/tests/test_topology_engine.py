@@ -15,7 +15,7 @@ from app.topology.engine import (
     prune_self_referential_links,
     recompute_topology_and_roles,
 )
-from app.models import NetworkDevice, NetworkLink
+from app.models import ConfigChangeLog, NetworkDevice, NetworkLink
 
 
 def _make_device(session, **kwargs):
@@ -447,6 +447,55 @@ def test_recompute_topology_and_roles_end_to_end_core_and_floor(db_session):
     assert core.device_role in ("CORE_SWITCH", "DISTRIBUTION_SWITCH", "ACCESS_SWITCH")
     # L3 + 실제 Neighbor가 1개뿐이라 임계치 미달일 수 있으나, 최소한 Gate를 통과해 UNKNOWN은 아니어야 한다.
     assert floor.device_role != "UNKNOWN"
+
+
+def test_recompute_topology_and_roles_logs_auto_role_change(db_session):
+    """[KOS20260923] 구성 변경 이력 - 자동 재분류로 device_role이 바뀌면
+    ConfigChangeLog(source=DISCOVERY)에 남아야 한다."""
+    core = _make_device(db_session, management_ip="10.0.0.1", lldp_chassis_id="core-chassis")
+    core.layer3_capable = True
+    core.device_type = "L3_SWITCH"
+    core.device_role = "SERVER"  # 이 시나리오에서 나올 수 없는, 의도적으로 틀린 이전 값
+
+    floor = _make_device(db_session, management_ip="10.0.0.2", lldp_chassis_id="floor-chassis", hostname="FLOOR-SW-01")
+    floor.device_type = "L2_POE_SWITCH"
+    floor.discovery_depth = 1
+    db_session.flush()
+
+    core_if = DeviceInterface(device_id=core.id, if_index=1, name="Gi0/1", is_uplink=True)
+    floor_if = DeviceInterface(device_id=floor.id, if_index=1, name="Gi0/24", is_uplink=True)
+    db_session.add_all([core_if, floor_if])
+    db_session.flush()
+
+    db_session.add(
+        LldpNeighbor(
+            local_device_id=core.id,
+            local_interface_id=core_if.id,
+            remote_chassis_id="floor-chassis",
+            remote_port_id="Gi0/24",
+            remote_mgmt_ip="10.0.0.2",
+        )
+    )
+    db_session.add(
+        LldpNeighbor(
+            local_device_id=floor.id,
+            local_interface_id=floor_if.id,
+            remote_chassis_id="core-chassis",
+            remote_port_id="Gi0/1",
+            remote_mgmt_ip="10.0.0.1",
+        )
+    )
+    db_session.commit()
+
+    recompute_topology_and_roles(db_session)
+
+    db_session.refresh(core)
+    assert core.device_role != "SERVER"
+    change = db_session.query(ConfigChangeLog).filter_by(device_id=core.id, field_name="device_role").one()
+    assert change.old_value == "SERVER"
+    assert change.new_value == core.device_role
+    assert change.source == "DISCOVERY"
+    assert change.performed_by is None
 
 
 def test_compute_interface_link_directions_marks_uplink_and_downlink(db_session):

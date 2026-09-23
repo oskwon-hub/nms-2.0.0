@@ -13,6 +13,7 @@ from typing import Optional
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.config_history import record_config_change
 from app.models import NetworkDevice, utcnow
 
 
@@ -146,8 +147,22 @@ def resolve_or_create_device(session: Session, observation: DeviceObservation) -
         or observation.primary_mac
     )
     if strong_match and observation.management_ip and existing.management_ip != observation.management_ip:
+        record_config_change(
+            session,
+            device_id=existing.id,
+            field_name="management_ip",
+            old_value=existing.management_ip,
+            new_value=observation.management_ip,
+            source="DISCOVERY",
+        )
         existing.management_ip = observation.management_ip
 
+    # [KOS20260923] "구성 변경 이력" 요청 - 이 루프가 덮어쓰는 필드 중 os_version/
+    # firmware_version은 "장비 구성"으로 의미 있는 변경(펌웨어 업그레이드 등)이라
+    # 이력에 남긴다. hostname/vendor/model/serial 등 나머지는 한 번 정해지면
+    # 거의 안 바뀌는 식별용 필드거나 sys_descr처럼 원문 그대로라 변경으로
+    # 취급할 실익이 적어 대상에서 뺐다.
+    _CONFIG_TRACKED_FIELDS = {"os_version", "firmware_version"}
     for field_name in (
         "hostname",
         "primary_mac",
@@ -165,6 +180,15 @@ def resolve_or_create_device(session: Session, observation: DeviceObservation) -
     ):
         value = getattr(observation, field_name)
         if value:
+            if field_name in _CONFIG_TRACKED_FIELDS:
+                record_config_change(
+                    session,
+                    device_id=existing.id,
+                    field_name=field_name,
+                    old_value=getattr(existing, field_name),
+                    new_value=value,
+                    source="DISCOVERY",
+                )
             setattr(existing, field_name, value)
 
     existing.snmp_enabled = existing.snmp_enabled or observation.snmp_enabled

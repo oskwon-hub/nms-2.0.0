@@ -2,6 +2,7 @@ from fastapi import APIRouter
 
 from app.api import (
     routes_alarms,
+    routes_config,
     routes_control,
     routes_devices,
     routes_discovery,
@@ -18,3 +19,4 @@ api_router.include_router(routes_control.router)
 api_router.include_router(routes_alarms.router)
 api_router.include_router(routes_reports.router)
 api_router.include_router(routes_settings.router)
+api_router.include_router(routes_config.router)

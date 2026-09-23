@@ -4,10 +4,10 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from app.control import poe_control, port_control
+from app.control import interface_config_control, poe_control, port_control
 from app.control.port_control import PortNotFoundError, ProtectedPortError
 from app.db import db_session_dependency
-from app.schemas import ControlActionIn, ControlLogOut
+from app.schemas import ControlActionIn, ControlLogOut, DescriptionSetIn, VlanSetIn
 
 router = APIRouter(tags=["control"])
 
@@ -54,6 +54,32 @@ async def disable_poe(
 ):
     try:
         return await poe_control.set_poe_status(session, device_id, if_id, False, payload.performed_by, payload.force)
+    except PortNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ProtectedPortError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+
+
+@router.post("/devices/{device_id}/interfaces/{if_id}/vlan", response_model=ControlLogOut)
+async def set_vlan(device_id: int, if_id: int, payload: VlanSetIn, session: Session = Depends(db_session_dependency)):
+    try:
+        return await interface_config_control.set_port_vlan(
+            session, device_id, if_id, payload.vlan, payload.performed_by, payload.force
+        )
+    except PortNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ProtectedPortError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+
+
+@router.post("/devices/{device_id}/interfaces/{if_id}/description", response_model=ControlLogOut)
+async def set_description(
+    device_id: int, if_id: int, payload: DescriptionSetIn, session: Session = Depends(db_session_dependency)
+):
+    try:
+        return await interface_config_control.set_interface_description(
+            session, device_id, if_id, payload.description, payload.performed_by, payload.force
+        )
     except PortNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ProtectedPortError as exc:

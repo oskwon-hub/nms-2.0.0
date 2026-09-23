@@ -101,6 +101,40 @@ def test_control_log_failed_is_critical_denied_is_info(db_session):
     assert "INFO" in severities
 
 
+def test_config_change_from_discovery_is_warning_manual_is_info(db_session):
+    """[KOS20260923] 구성 이상/비인가 변경 탐지 - 재탐색이 감지한 변경(source=
+    DISCOVERY, 운영자가 모르는 사이 바뀐 값)은 WARNING, 운영자가 API로 직접 바꾼
+    변경(source=MANUAL)은 이미 누가 바꿨는지 알고 있으므로 INFO여야 한다."""
+    from app.models import ConfigChangeLog
+
+    device = _make_device(db_session, management_ip="10.0.0.1")
+    db_session.flush()
+    db_session.add(
+        ConfigChangeLog(
+            device_id=device.id,
+            field_name="vlan",
+            old_value="10",
+            new_value="20",
+            source="DISCOVERY",
+        )
+    )
+    db_session.add(
+        ConfigChangeLog(
+            device_id=device.id,
+            field_name="device_role",
+            old_value="ACCESS_SWITCH",
+            new_value="CORE_SWITCH",
+            source="MANUAL",
+            performed_by="alice",
+        )
+    )
+    db_session.commit()
+
+    config_alarms = {a.severity: a for a in list_alarms(db_session) if a.category == "CONFIG"}
+    assert config_alarms["WARNING"].message.startswith(device.management_ip)
+    assert "alice" in config_alarms["INFO"].message
+
+
 def test_failed_discovery_run_produces_alarm(db_session):
     run = DiscoveryRun(profile="STANDARD", status="FAILED", started_at=utcnow(), ended_at=utcnow())
     db_session.add(run)

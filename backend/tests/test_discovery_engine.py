@@ -459,6 +459,87 @@ async def test_is_stp_root_is_set_and_survives_a_later_unsupported_rescan(sessio
     verify2.close()
 
 
+async def test_interface_admin_status_and_vlan_changes_are_logged_on_rescan(session_factory, monkeypatch):
+    """[KOS20260923] 구성 변경 이력 - 재탐색에서 포트 Admin 상태나 VLAN(PVID)이
+    이전과 달라지면 ConfigChangeLog(source=DISCOVERY)에 남아야 한다. 단, 최초
+    발견(신규 포트)은 비교할 이전 값이 없으므로 남기지 않는다."""
+    monkeypatch.setattr("app.discovery.engine.SnmpCollector", _FakeSnmpCollector)
+    monkeypatch.setattr("app.discovery.engine.probe_rtsp", _no_probe)
+    monkeypatch.setattr("app.discovery.engine.probe_onvif", _no_probe)
+    monkeypatch.setattr("app.discovery.engine.probe_http_title_hint", _no_probe)
+    monkeypatch.setattr("app.discovery.engine.probe_smb_or_rdp", _no_probe)
+    monkeypatch.setattr("app.discovery.engine.probe_ssh_banner", _no_ssh_banner)
+    monkeypatch.setattr("app.collectors.icmp.ping", _fake_ping)
+
+    from app.models import ConfigChangeLog, DiscoveryRun, NetworkDevice
+
+    RESCAN_IP = "10.0.0.221"
+    topo_entry = dict(
+        sysinfo=SystemInfo(sys_descr="Rescan Switch", sys_object_id="1.3.6.1.4.1.9.1.1", sys_name="RESCAN-SW-2"),
+        interfaces=[InterfaceInfo(if_index=1, name="Gi0/1", admin_status="UP")],
+        ip_forwarding=False,
+        bridge=True,
+        lldp=[],
+        fdb=[],
+        arp=[],
+        routes=[],
+        poe=[],
+        vlans=[10, 20],
+        pvids={1: 10},
+        chassis_id="rescan2-chassis",
+    )
+    monkeypatch.setitem(FAKE_TOPOLOGY, RESCAN_IP, topo_entry)
+
+    # [KOS20260923] VLAN(PVID) 수집은 DETAILED 프로파일에서만 켜진다
+    # (profiles.py: STANDARD/LIGHT는 collect_vlans=False) - STANDARD로 쓰면
+    # port_pvids가 항상 비어 있어 row.vlan이 아예 갱신되지 않는다.
+    engine = DiscoveryEngine(session_factory=session_factory, profile="DETAILED")
+
+    run1 = DiscoveryRun(profile="DETAILED", status="RUNNING")
+    session = session_factory()
+    session.add(run1)
+    session.commit()
+    run1_id = run1.id
+    session.close()
+    await engine.run(run1_id, [RESCAN_IP])
+
+    verify1 = session_factory()
+    device1 = verify1.scalars(select(NetworkDevice).where(NetworkDevice.management_ip == RESCAN_IP)).one()
+    device_id = device1.id
+    # 최초 발견된 포트의 admin_status/vlan은 비교할 이전 값이 없으므로 기록되지
+    # 않아야 한다(반면 device_role은 UNKNOWN -> 분류값으로 바뀌는 게 정상이라
+    # 같은 device에 대해 다른 필드의 로그가 있을 수 있다).
+    interface_field_changes = (
+        verify1.query(ConfigChangeLog)
+        .filter_by(device_id=device_id)
+        .filter(ConfigChangeLog.field_name.in_(["admin_status", "vlan"]))
+        .count()
+    )
+    assert interface_field_changes == 0
+    verify1.close()
+
+    # 재스캔: Admin 상태가 DOWN으로, PVID가 20으로 바뀐 상황을 재현한다.
+    topo_entry["interfaces"] = [InterfaceInfo(if_index=1, name="Gi0/1", admin_status="DOWN")]
+    topo_entry["pvids"] = {1: 20}
+
+    run2 = DiscoveryRun(profile="DETAILED", status="RUNNING")
+    session = session_factory()
+    session.add(run2)
+    session.commit()
+    run2_id = run2.id
+    session.close()
+    await engine.run(run2_id, [RESCAN_IP])
+
+    verify2 = session_factory()
+    changes = {
+        c.field_name: (c.old_value, c.new_value)
+        for c in verify2.query(ConfigChangeLog).filter_by(device_id=device_id).all()
+    }
+    assert changes["admin_status"] == ("UP", "DOWN")
+    assert changes["vlan"] == ("10", "20")
+    verify2.close()
+
+
 async def test_snmp_unreachable_host_is_still_classified_via_probes(session_factory, monkeypatch):
     """[KOS20260921] 이전에는 SNMP 미응답 호스트(대부분의 Windows/Linux/macOS PC)가
     _process_host의 조기 반환 경로에서 분류 로직 자체를 타지 않아 항상 UNKNOWN으로

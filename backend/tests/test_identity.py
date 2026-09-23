@@ -1,4 +1,5 @@
 from app.identity import DeviceObservation, resolve_or_create_device, stable_identity
+from app.models import ConfigChangeLog
 
 
 def test_stable_identity_priority_order():
@@ -57,6 +58,41 @@ def test_resolve_or_create_device_merges_by_serial_over_mac(db_session):
     assert created2 is False
     assert device2.id == device1.id
     assert device2.primary_mac == "aa:aa:aa:aa:aa:aa"
+
+
+def test_resolve_or_create_device_logs_firmware_and_ip_changes(db_session):
+    """[KOS20260923] 구성 변경 이력 - 재탐색이 firmware_version/management_ip
+    변경을 감지하면 ConfigChangeLog에 남아야 한다."""
+    device1, _ = resolve_or_create_device(
+        db_session,
+        DeviceObservation(
+            management_ip="10.0.0.5",
+            primary_mac="00:11:22:33:44:55",
+            firmware_version="1.0.0",
+            os_version="15.1",
+        ),
+    )
+    db_session.commit()
+    assert db_session.query(ConfigChangeLog).count() == 0  # 최초 생성은 "변경"이 아니다
+
+    device2, created2 = resolve_or_create_device(
+        db_session,
+        DeviceObservation(
+            management_ip="10.0.0.99",
+            primary_mac="00:11:22:33:44:55",
+            firmware_version="1.1.0",
+            os_version="15.1",  # 안 바뀐 값은 기록되지 않아야 한다
+        ),
+    )
+    db_session.commit()
+
+    assert created2 is False
+    assert device2.id == device1.id
+    logs = {log.field_name: (log.old_value, log.new_value) for log in db_session.query(ConfigChangeLog).all()}
+    assert logs["management_ip"] == ("10.0.0.5", "10.0.0.99")
+    assert logs["firmware_version"] == ("1.0.0", "1.1.0")
+    assert "os_version" not in logs
+    assert all(log.source == "DISCOVERY" for log in db_session.query(ConfigChangeLog).all())
 
 
 def test_distinct_devices_without_shared_identifier_are_not_merged(db_session):

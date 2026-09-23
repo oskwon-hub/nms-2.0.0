@@ -321,6 +321,18 @@ class ControlActionIn(BaseModel):
     force: bool = False
 
 
+class VlanSetIn(BaseModel):
+    vlan: int
+    performed_by: str = "operator"
+    force: bool = False
+
+
+class DescriptionSetIn(BaseModel):
+    description: str
+    performed_by: str = "operator"
+    force: bool = False
+
+
 class ControlLogOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -335,6 +347,31 @@ class ControlLogOut(BaseModel):
     error_message: Optional[str]
     performed_by: str
     created_at: dt.datetime
+
+
+class RestoreConfigChangeIn(BaseModel):
+    performed_by: str = "operator"
+    force: bool = False
+
+
+class RestoreResultOut(BaseModel):
+    result: str  # SUCCESS|FAILED|DENIED
+    new_value: Optional[str]
+    error_message: Optional[str]
+
+
+class ConfigChangeLogOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    device_id: int
+    interface_id: Optional[int]
+    field_name: str
+    old_value: Optional[str]
+    new_value: Optional[str]
+    source: str
+    performed_by: Optional[str]
+    detected_at: dt.datetime
 
 
 class AlarmOut(BaseModel):
