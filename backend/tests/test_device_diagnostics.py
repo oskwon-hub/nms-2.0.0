@@ -6,10 +6,11 @@ import subprocess
 import pytest
 from fastapi import HTTPException
 
-from app.api.routes_devices import diagnose_device, get_l2_path_evidence
+from app.api.routes_devices import diagnose_device, get_l2_path_evidence, ping_from_nms
 from app.diagnostics import _clean_cli_output, get_source_ip, get_source_mac, parse_ping_metrics, parse_route_hops, run_diagnostic
 from app.identity import DeviceObservation, resolve_or_create_device
 from app.models import DeviceInterface, MacFdb
+from app.schemas import PingTargetIn
 
 
 def _create_device(session, ip="192.0.2.10"):
@@ -40,6 +41,39 @@ def test_ping_runs_against_inventory_ip_and_returns_output(db_session, monkeypat
     }
     assert calls[0][0] == ["ping", "-n", "-c", "4", "-W", "2", "192.0.2.10"]
     assert 0 < calls[0][1]["timeout"] <= 12
+
+
+# [KOS20260923] New Topology 화면의 "NMS 서버 → 노드 Ping" 요청 - device_id로
+# 조회되는 인벤토리 장비가 아니라 사용자가 직접 입력한(또는 Topology 응답의)
+# IP로도 Ping을 실행할 수 있어야 한다(엔드포인트는 SSH/Telnet CLI가 없어
+# From→To Ping이 불가능한 경우가 많음). diagnose_device와 달리 device_id 없이
+# 임의의 IP를 검증(ipaddress.ip_address)만 거쳐 바로 run_diagnostic을 호출한다.
+def test_ping_from_nms_runs_against_given_ip(monkeypatch):
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append((command, kwargs))
+        return subprocess.CompletedProcess(command, 0, "4 packets transmitted, 4 received", "")
+
+    monkeypatch.setattr("app.diagnostics.subprocess.run", fake_run)
+    result = ping_from_nms(PingTargetIn(target=" 192.0.2.20 "))
+
+    assert result.model_dump() == {
+        "target": "192.0.2.20",
+        "source_ip": None,
+        "command": "ping",
+        "protocol": "ICMP",
+        "success": True,
+        "output": "4 packets transmitted, 4 received",
+        "hops": [],
+    }
+    assert calls[0][0] == ["ping", "-n", "-c", "4", "-W", "2", "192.0.2.20"]
+
+
+def test_ping_from_nms_rejects_invalid_target():
+    with pytest.raises(HTTPException) as invalid:
+        ping_from_nms(PingTargetIn(target="not-an-ip"))
+    assert invalid.value.status_code == 400
 
 
 def test_tracepath_fallback_returns_failure_output(db_session, monkeypatch):

@@ -64,6 +64,10 @@ class DeviceDiagnosticOut(BaseModel):
     hops: list[DiagnosticHopOut] = Field(default_factory=list)
 
 
+class PingTargetIn(BaseModel):
+    target: str
+
+
 class L2SwitchEvidenceOut(BaseModel):
     switch_id: int
     hostname: Optional[str]

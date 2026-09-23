@@ -5,7 +5,7 @@ import ipaddress
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import func, or_, select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.classification.device_role import DEVICE_ROLES
@@ -13,6 +13,7 @@ from app.classification.reclassify import reclassify_all_devices
 from app.config_history import record_config_change
 from app.db import db_session_dependency
 from app.diagnostics import get_source_ip, get_source_mac, parse_route_hops, run_diagnostic
+from app.l2_path import build_l2_path_evidence
 from app.models import (
     ArpEntry,
     DeviceInterface,
@@ -31,8 +32,8 @@ from app.schemas import (
     FdbOut,
     InterfaceOut,
     L2PathEvidenceOut,
-    L2SwitchEvidenceOut,
     NeighborOut,
+    PingTargetIn,
     PoeOut,
     ReclassifyOut,
     RoleUpdateIn,
@@ -48,6 +49,23 @@ def _get_device_or_404(session: Session, device_id: int) -> NetworkDevice:
     if device is None:
         raise HTTPException(status_code=404, detail=f"장비를 찾을 수 없습니다: {device_id}")
     return device
+
+
+@router.post("/diagnostics/ping", response_model=DeviceDiagnosticOut)
+def ping_from_nms(payload: PingTargetIn):
+    """NMS 서버에서 사용자가 지정한 IPv4/IPv6 주소로 ICMP Ping을 실행한다."""
+    try:
+        target = str(ipaddress.ip_address(payload.target.strip()))
+    except ValueError:
+        raise HTTPException(status_code=400, detail="유효한 Ping 대상 IP를 입력해 주세요.") from None
+    command, success, output = run_diagnostic(target, "ping", "ICMP")
+    return DeviceDiagnosticOut(
+        target=target,
+        command=command,
+        protocol="ICMP",
+        success=success,
+        output=output,
+    )
 
 
 @router.get("/devices", response_model=list[DeviceOut])
@@ -144,56 +162,7 @@ def get_l2_path_evidence(device_id: int, session: Session = Depends(db_session_d
 
     source_ip = get_source_ip(target_ip)
     source_mac = get_source_mac(target_ip)
-    target_mac = device.primary_mac.lower() if device.primary_mac else None
-    result = L2PathEvidenceOut(source_ip=source_ip, source_mac=source_mac, target_ip=target_ip, target_mac=target_mac)
-    if not source_mac or not target_mac:
-        return result
-
-    stmt = (
-        select(MacFdb, NetworkDevice, DeviceInterface)
-        .join(NetworkDevice, MacFdb.device_id == NetworkDevice.id)
-        .outerjoin(DeviceInterface, MacFdb.interface_id == DeviceInterface.id)
-        .where(func.lower(MacFdb.mac).in_([source_mac, target_mac]))
-    )
-    groups: dict[tuple[int, int | None], dict] = {}
-    for fdb, switch, interface in session.execute(stmt):
-        key = (switch.id, fdb.vlan)
-        group = groups.setdefault(key, {"switch": switch, "source": [], "target": []})
-        side = "source" if fdb.mac.lower() == source_mac else "target"
-        group[side].append((interface, fdb.last_seen_at))
-
-    for (_, vlan), group in sorted(groups.items(), key=lambda item: (item[0][0], item[0][1] or -1)):
-        source_rows = group["source"]
-        target_rows = group["target"]
-        source_ids = {interface.id for interface, _ in source_rows if interface}
-        target_ids = {interface.id for interface, _ in target_rows if interface}
-        # [KOS20260922] 같은 포트에서 두 MAC이 보이면 그 스위치를 경유했다고
-        # 단정할 수 없다. 다른 포트여도 FDB만으로 전체 순서나 현재 경로는 확정할 수 없다.
-        if not source_rows or not target_rows:
-            relation = "ONE_SIDE"
-        elif not source_ids or not target_ids:
-            relation = "UNKNOWN_PORT"
-        elif source_ids & target_ids:
-            relation = "SAME_PORT"
-        else:
-            relation = "DIFFERENT_PORTS"
-        result.switches.append(
-            L2SwitchEvidenceOut(
-                switch_id=group["switch"].id,
-                hostname=group["switch"].hostname,
-                sys_name=group["switch"].model if group["switch"].snmp_enabled else None,
-                management_ip=group["switch"].management_ip,
-                sys_descr=group["switch"].sys_descr,
-                device_type=group["switch"].device_type,
-                vlan=vlan,
-                source_ports=sorted({interface.name or f"#{interface.if_index}" for interface, _ in source_rows if interface}),
-                target_ports=sorted({interface.name or f"#{interface.if_index}" for interface, _ in target_rows if interface}),
-                source_seen_at=max((seen_at for _, seen_at in source_rows), default=None),
-                target_seen_at=max((seen_at for _, seen_at in target_rows), default=None),
-                relation=relation,
-            )
-        )
-    return result
+    return build_l2_path_evidence(session, source_ip, source_mac, target_ip, device.primary_mac)
 
 
 @router.get("/devices/{device_id}/interfaces", response_model=list[InterfaceOut])

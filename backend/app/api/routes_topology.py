@@ -12,7 +12,14 @@ from app.db import db_session_dependency
 from app.credentials import resolve_ssh_credentials
 from app.diagnostics import run_remote_ping
 from app.models import DeviceInterface, NetworkDevice, NetworkLink
-from app.schemas import LinkPingIn, LinkPingOut, ManualTopologyLinkIn, TopologyLinkOut, TopologyNodeOut, TopologyOut
+from app.schemas import (
+    LinkPingIn,
+    LinkPingOut,
+    ManualTopologyLinkIn,
+    TopologyLinkOut,
+    TopologyNodeOut,
+    TopologyOut,
+)
 from app.topology.engine import create_manual_link
 
 router = APIRouter(tags=["topology"])
@@ -49,6 +56,37 @@ def delete_topology_link(link_id: int, session: Session = Depends(db_session_dep
     session.commit()
 
 
+def _link_cli_credentials(
+    payload: LinkPingIn | None,
+    source: NetworkDevice,
+    session: Session,
+) -> list[tuple[str, str, int, str]]:
+    if payload is not None and payload.password is not None:
+        if payload.protocol is None or payload.username is None or payload.port is None:
+            raise HTTPException(status_code=400, detail="직접 입력한 인증정보에는 프로토콜, ID, Password, 포트가 모두 필요합니다.")
+        protocol = payload.protocol.upper()
+        if protocol not in {"SSH", "TELNET"}:
+            raise HTTPException(status_code=400, detail="접속 프로토콜은 SSH 또는 TELNET이어야 합니다.")
+        username = payload.username.strip()
+        if not username:
+            raise HTTPException(status_code=400, detail="CLI 사용자명을 입력해 주세요.")
+        return [(username, payload.password, payload.port, protocol)]
+
+    credentials = resolve_ssh_credentials(session, source)
+    if payload is not None and payload.protocol is not None:
+        protocol = payload.protocol.upper()
+        if protocol not in {"SSH", "TELNET"}:
+            raise HTTPException(status_code=400, detail="접속 프로토콜은 SSH 또는 TELNET이어야 합니다.")
+        if payload.port is None:
+            raise HTTPException(status_code=400, detail="접속 포트를 입력해 주세요.")
+        override_username = payload.username.strip() if payload.username else None
+        credentials = [
+            (override_username or username, password, payload.port, protocol)
+            for username, password, _port, _protocol in credentials
+        ]
+    return credentials
+
+
 @router.post("/topology/links/{link_id}/ping", response_model=LinkPingOut)
 def ping_topology_link(
     link_id: int,
@@ -77,32 +115,7 @@ def ping_topology_link(
     except ValueError:
         raise HTTPException(status_code=400, detail="From 또는 To 장비의 관리 IP가 유효하지 않습니다.") from None
 
-    if payload is not None and payload.password is not None:
-        if payload.protocol is None or payload.username is None or payload.port is None:
-            raise HTTPException(status_code=400, detail="직접 입력한 인증정보에는 프로토콜, ID, Password, 포트가 모두 필요합니다.")
-        protocol = payload.protocol.upper()
-        if protocol not in {"SSH", "TELNET"}:
-            raise HTTPException(status_code=400, detail="접속 프로토콜은 SSH 또는 TELNET이어야 합니다.")
-        username = payload.username.strip()
-        if not username:
-            raise HTTPException(status_code=400, detail="CLI 사용자명을 입력해 주세요.")
-        credentials = [(username, payload.password, payload.port, protocol)]
-    else:
-        credentials = resolve_ssh_credentials(session, source)
-        # Password를 비워 장비별 저장 Credential을 사용할 때도 화면에서 고른
-        # 프로토콜/포트는 적용한다. NSH이지만 Telnet이 닫힌 현장 예외를 SSH로
-        # 전환할 수 있고, 저장된 두 Prefix 암호 후보는 그대로 순서대로 시도한다.
-        if payload is not None and payload.protocol is not None:
-            protocol = payload.protocol.upper()
-            if protocol not in {"SSH", "TELNET"}:
-                raise HTTPException(status_code=400, detail="접속 프로토콜은 SSH 또는 TELNET이어야 합니다.")
-            if payload.port is None:
-                raise HTTPException(status_code=400, detail="접속 포트를 입력해 주세요.")
-            override_username = payload.username.strip() if payload.username else None
-            credentials = [
-                (override_username or username, password, payload.port, protocol)
-                for username, password, _port, _protocol in credentials
-            ]
+    credentials = _link_cli_credentials(payload, source, session)
     if not credentials:
         return LinkPingOut(
             link_id=link.id,

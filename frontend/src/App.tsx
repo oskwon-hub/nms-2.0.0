@@ -1,6 +1,7 @@
 import { NavLink, Route, Routes } from "react-router-dom";
 import DevicesTreePage from "./pages/DevicesTreePage";
 import TopologyGraphPage from "./pages/TopologyGraphPage";
+import NewTopologyPage from "./pages/NewTopologyPage";
 import DiscoveryPage from "./pages/DiscoveryPage";
 import ConfigurationPage from "./pages/ConfigurationPage";
 import DeviceDetailPage from "./pages/DeviceDetailPage";
@@ -23,6 +24,9 @@ export default function App() {
           </NavLink>
           <NavLink to="/topology" className={({ isActive }) => (isActive ? "active" : "")}>
             Topology
+          </NavLink>
+          <NavLink to="/topology-new" className={({ isActive }) => (isActive ? "active" : "")}>
+            New Topology
           </NavLink>
           <NavLink to="/discovery" className={({ isActive }) => (isActive ? "active" : "")}>
             Discovery
@@ -50,6 +54,7 @@ export default function App() {
           <Route path="/devices" element={<DevicesTreePage />} />
           <Route path="/devices/:id" element={<DeviceDetailPage />} />
           <Route path="/topology" element={<TopologyGraphPage />} />
+          <Route path="/topology-new" element={<NewTopologyPage />} />
           <Route path="/discovery" element={<DiscoveryPage />} />
           <Route path="/configuration" element={<ConfigurationPage />} />
           <Route path="/alarms" element={<AlarmsPage />} />

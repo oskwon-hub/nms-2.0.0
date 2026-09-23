@@ -11,7 +11,7 @@ import ReactFlow, {
   applyNodeChanges,
 } from "reactflow";
 import "reactflow/dist/style.css";
-import { api, DeviceDetail, LinkPingResult, Topology, TopologyLink } from "../api/client";
+import { api, DeviceDetail, Topology, TopologyLink } from "../api/client";
 import { computeLayoutPositions, LAYOUT_LABELS, LayoutMode } from "../lib/topologyLayouts";
 import { buildClusteredTopology, RenderNode } from "../lib/topologyClustering";
 import { formatUtcDateTime } from "../lib/dateTime";
@@ -22,6 +22,7 @@ import Modal from "./Modal";
 import DeviceDetailContent from "./DeviceDetailContent";
 import TopologyBoxZoom from "./TopologyBoxZoom";
 import TopologyContextMenu from "./TopologyContextMenu";
+import LinkPingDiagnostics from "./LinkPingDiagnostics";
 
 // edgeTypes/nodeTypes 객체는 매 렌더마다 새로 만들면 React Flow가 경고를 띄우고
 // 불필요하게 다시 그리므로 컴포넌트 바깥에서 한 번만 만든다.
@@ -303,37 +304,11 @@ export default function TopologyGraphView({
   const [linkActionError, setLinkActionError] = useState<string | null>(null);
   const [linkActionBusy, setLinkActionBusy] = useState(false);
   const [confirmDeleteLinkId, setConfirmDeleteLinkId] = useState<number | null>(null);
-  const [linkPingRunning, setLinkPingRunning] = useState(false);
-  const [linkPingResult, setLinkPingResult] = useState<LinkPingResult | null>(null);
-  const [linkPingError, setLinkPingError] = useState<string | null>(null);
-  const [linkPingProtocol, setLinkPingProtocol] = useState<"SSH" | "TELNET">("SSH");
-  const [linkPingDirection, setLinkPingDirection] = useState<"FORWARD" | "REVERSE">("FORWARD");
-  const [linkPingUsername, setLinkPingUsername] = useState("admin");
-  const [linkPingPassword, setLinkPingPassword] = useState("");
-  const [linkPingPort, setLinkPingPort] = useState(22);
   const reactFlowInstanceRef = useRef<ReactFlowInstance | null>(null);
 
   useEffect(() => {
     setTopology(initialTopology);
   }, [initialTopology]);
-
-  useEffect(() => {
-    setLinkPingResult(null);
-    setLinkPingError(null);
-    setLinkPingPassword("");
-    setLinkPingUsername("admin");
-    setLinkPingDirection("FORWARD");
-  }, [selectedEdgeId]);
-
-  useEffect(() => {
-    const link = selectedEdgeId ? topology.links.find((item) => String(item.id) === selectedEdgeId) : null;
-    const sourceId = linkPingDirection === "REVERSE" ? link?.dst_device_id : link?.src_device_id;
-    const source = sourceId != null ? topology.nodes.find((node) => node.id === sourceId) : null;
-    const identity = `${source?.hostname ?? ""} ${source?.sys_name ?? ""} ${source?.device_type ?? ""}`.trim().toUpperCase();
-    const protocol = identity.startsWith("NSH") ? "TELNET" : "SSH";
-    setLinkPingProtocol(protocol);
-    setLinkPingPort(protocol === "TELNET" ? 23 : 22);
-  }, [selectedEdgeId, linkPingDirection, topology.links, topology.nodes]);
 
   // 노드를 선택하면 Device Detail 페이지의 Overview 탭과 동일한 정보를 우측 패널에
   // 보여준다. Topology 노드에는 요약 필드만 있으므로 전체 상세를 별도로 조회한다.
@@ -610,35 +585,6 @@ export default function TopologyGraphView({
     setConfirmDeleteLinkId(linkId);
   };
 
-  const handleLinkPing = async (linkId: number) => {
-    if (linkPingPassword && !linkPingUsername.trim()) {
-      setLinkPingError("CLI ID를 입력해 주세요.");
-      return;
-    }
-    setLinkPingRunning(true);
-    setLinkPingResult(null);
-    setLinkPingError(null);
-    try {
-      const credential = linkPingPassword ? {
-        direction: linkPingDirection,
-        protocol: linkPingProtocol,
-        username: linkPingUsername.trim(),
-        password: linkPingPassword,
-        port: linkPingPort,
-      } : {
-        direction: linkPingDirection,
-        protocol: linkPingProtocol,
-        username: linkPingUsername.trim() || undefined,
-        port: linkPingPort,
-      };
-      setLinkPingResult(await api.pingTopologyLink(linkId, credential));
-    } catch (err: any) {
-      setLinkPingError(err.message);
-    } finally {
-      setLinkPingRunning(false);
-    }
-  };
-
   const nodeLabel = (id: string | number): string => {
     const found = topology.nodes.find((n) => String(n.id) === String(id));
     return found ? found.hostname || found.management_ip || `#${found.id}` : `#${id}`;
@@ -650,20 +596,6 @@ export default function TopologyGraphView({
   };
 
   const selectedLink = selectedEdgeId ? edges.find((e) => e.id === selectedEdgeId)?.data?.link : null;
-  const linkPingSourceId = selectedLink
-    ? (linkPingDirection === "REVERSE" ? selectedLink.dst_device_id : selectedLink.src_device_id)
-    : null;
-  const linkPingSource = linkPingSourceId != null
-    ? topology.nodes.find((node) => node.id === linkPingSourceId)
-    : null;
-  const linkPingSourceIdentity = `${linkPingSource?.hostname ?? ""} ${linkPingSource?.sys_name ?? ""} ${linkPingSource?.device_type ?? ""}`
-    .trim()
-    .toUpperCase();
-  const linkPingDefaultName = linkPingSourceIdentity.startsWith("NSH")
-    ? "NSH 기본 Credential"
-    : linkPingSourceIdentity.startsWith("NHM")
-      ? "NHM 기본 Credential"
-      : "장비 Credential Profile";
 
   // [KOS20260921] 링크가 많으면(예: 저신뢰 ARP-only 링크 수십 개가 한 장비에
   // 몰린 경우) 그래프만으로는 "상위→하위로 어떻게 이어지는지" 눈으로 따라가기
@@ -1066,97 +998,7 @@ export default function TopologyGraphView({
               </tbody>
             </table>
             {selectedLink.id >= 0 && selectedLink.source !== "CLUSTER" && (
-              <div style={{ marginTop: 16, paddingTop: 14, borderTop: "1px solid var(--border)" }}>
-                <div className="tree-group-title">From → To Ping 연결 확인</div>
-                <select
-                  aria-label="Ping 실행 방향"
-                  value={linkPingDirection}
-                  onChange={(event) => setLinkPingDirection(event.target.value as "FORWARD" | "REVERSE")}
-                  style={{ width: "100%", marginBottom: 8 }}
-                >
-                  <option value="FORWARD">
-                    {nodeLabel(selectedLink.src_device_id)} → {nodeLabel(selectedLink.dst_device_id)}
-                  </option>
-                  <option value="REVERSE">
-                    {nodeLabel(selectedLink.dst_device_id)} → {nodeLabel(selectedLink.src_device_id)}
-                  </option>
-                </select>
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 90px", gap: 8, marginBottom: 8 }}>
-                  <select
-                    aria-label="CLI 접속 프로토콜"
-                    value={linkPingProtocol}
-                    onChange={(event) => {
-                      const protocol = event.target.value as "SSH" | "TELNET";
-                      setLinkPingProtocol(protocol);
-                      setLinkPingPort(protocol === "TELNET" ? 23 : 22);
-                    }}
-                  >
-                    <option value="SSH">SSH</option>
-                    <option value="TELNET">Telnet</option>
-                  </select>
-                  <input
-                    type="number"
-                    min={1}
-                    max={65535}
-                    aria-label="CLI 접속 포트"
-                    title="접속 포트"
-                    value={linkPingPort}
-                    onChange={(event) => setLinkPingPort(Number(event.target.value))}
-                  />
-                </div>
-                <input
-                  type="text"
-                  aria-label="CLI ID"
-                  placeholder="ID"
-                  value={linkPingUsername}
-                  onChange={(event) => setLinkPingUsername(event.target.value)}
-                  style={{ width: "100%", marginBottom: 8 }}
-                />
-                <input
-                  type="password"
-                  aria-label="CLI Password"
-                  placeholder="Password (비우면 장비별 기본값 사용)"
-                  value={linkPingPassword}
-                  onChange={(event) => setLinkPingPassword(event.target.value)}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter") handleLinkPing(selectedLink.id);
-                  }}
-                  style={{ width: "100%", marginBottom: 8 }}
-                />
-                {!linkPingPassword && (
-                  <div className="muted" style={{ fontSize: 12, marginBottom: 8 }}>
-                    Password가 비어 있어 {linkPingDefaultName}을 사용합니다.
-                  </div>
-                )}
-                <button
-                  className="btn btn-primary"
-                  style={{ width: "100%" }}
-                  disabled={linkPingRunning}
-                  onClick={() => handleLinkPing(selectedLink.id)}
-                >
-                  {linkPingRunning ? "From → To Ping 실행 중..." : "From → To Ping으로 연결 확인"}
-                </button>
-                {linkPingError && <div className="error-banner" style={{ marginTop: 8 }}>{linkPingError}</div>}
-                {linkPingResult && (
-                  <div style={{ marginTop: 10 }}>
-                    <div style={{ fontWeight: 700, color: linkPingResult.success ? "#059669" : "#dc2626" }}>
-                      {linkPingResult.from_ip} → {linkPingResult.to_ip}: {linkPingResult.success ? "연결 성공" : "연결 실패"}
-                    </div>
-                    <div className="muted" style={{ marginTop: 4 }}>접속 방식: {linkPingResult.protocol ?? linkPingProtocol}</div>
-                    {!linkPingResult.supported && <div className="muted" style={{ marginTop: 4 }}>원격 Ping을 실행할 수 없습니다.</div>}
-                    {linkPingResult.packet_loss_percent != null && (
-                      <div className="muted" style={{ marginTop: 4 }}>패킷 손실률: {linkPingResult.packet_loss_percent}%</div>
-                    )}
-                    {linkPingResult.rtt_avg_ms != null && (
-                      <div className="muted">
-                        RTT 최소/평균/최대: {linkPingResult.rtt_min_ms} / {linkPingResult.rtt_avg_ms} / {linkPingResult.rtt_max_ms} ms
-                      </div>
-                    )}
-                    {linkPingResult.command && <div className="muted" style={{ marginTop: 4 }}>명령: {linkPingResult.command}</div>}
-                    <pre className="diagnostic-output" style={{ marginTop: 8 }}>{linkPingResult.output}</pre>
-                  </div>
-                )}
-              </div>
+                <LinkPingDiagnostics links={[selectedLink]} topology={topology} />
             )}
           </div>
         )}

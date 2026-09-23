@@ -220,3 +220,42 @@ export function filterTopologyByDeviceDescendants(topology: Topology, deviceId: 
     links: topology.links.filter((l) => includedIds.has(l.src_device_id) && includedIds.has(l.dst_device_id)),
   };
 }
+
+// [KOS20260923] New Topology 화면의 우클릭 "Show Upstream" 요청 - TopologyGraphView.tsx의
+// upstreamPath(같은 이름의 useMemo, 훅 내부 상태에 묶여 있어 그대로 재사용 불가)와
+// 동일한 알고리즘을 컴포넌트에 묶이지 않는 순수 함수로 옮긴다: discovery_depth가
+// 더 작은(상위/Core 방향) 이웃을 계속 따라가며 경로를 만든다. 여러 상위 후보가
+// 있으면 depth가 가장 작은 쪽을 우선한다.
+export function computeUpstreamPath(topology: Topology, deviceId: number): { id: number; label: string }[] {
+  const nodesById = new Map(topology.nodes.map((n) => [n.id, n]));
+  const nodeLabel = (id: number): string => {
+    const n = nodesById.get(id);
+    return n ? n.hostname || n.management_ip || `#${n.id}` : `#${id}`;
+  };
+  const nodeDepth = (id: number): number => nodesById.get(id)?.discovery_depth ?? 0;
+
+  const path: number[] = [deviceId];
+  const visited = new Set<number>([deviceId]);
+  let currentId = deviceId;
+  for (let i = 0; i < 30; i++) {
+    const currentDepth = nodeDepth(currentId);
+    if (currentDepth <= 0) break;
+    let bestParent: number | null = null;
+    let bestDepth = currentDepth;
+    for (const link of topology.links) {
+      const otherId =
+        link.src_device_id === currentId ? link.dst_device_id : link.dst_device_id === currentId ? link.src_device_id : null;
+      if (otherId == null || visited.has(otherId)) continue;
+      const otherDepth = nodeDepth(otherId);
+      if (otherDepth < bestDepth) {
+        bestDepth = otherDepth;
+        bestParent = otherId;
+      }
+    }
+    if (bestParent == null) break;
+    path.push(bestParent);
+    visited.add(bestParent);
+    currentId = bestParent;
+  }
+  return path.reverse().map((id) => ({ id, label: nodeLabel(id) }));
+}

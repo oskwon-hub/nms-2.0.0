@@ -347,6 +347,8 @@ export const api = {
   getDevice: (id: number) => request<DeviceDetail>(`/devices/${id}`),
   diagnoseDevice: (id: number, kind: "ping" | "traceroute", protocol?: "TCP" | "UDP" | "ICMP") =>
     request<DeviceDiagnostic>(`/devices/${id}/diagnostics/${kind}${protocol ? `?protocol=${protocol}` : ""}`, { method: "POST" }),
+  pingFromNms: (target: string) =>
+    request<DeviceDiagnostic>("/diagnostics/ping", { method: "POST", body: JSON.stringify({ target }) }),
   getL2PathEvidence: (id: number) => request<L2PathEvidence>(`/devices/${id}/diagnostics/l2-path`),
   reclassifyDevices: () => request<{ changed: number }>("/devices/reclassify", { method: "POST" }),
   getInterfaces: (id: number) => request<DeviceInterfaceRow[]>(`/devices/${id}/interfaces`),
